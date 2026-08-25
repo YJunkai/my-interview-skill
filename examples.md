@@ -9,6 +9,7 @@
 3. [HR面经典回答](#3-hr面经典回答)
 4. [话术技巧](#4-话术技巧)
 5. [常见陷阱与应对](#5-常见陷阱与应对)
+6. [🆕 数据/训练/对齐方向范例](#6-数据训练对齐方向范例)
 
 ---
 
@@ -690,3 +691,281 @@ y = (x - μ) / σ * γ + β
 - [STAR Method Guide](https://www.themuse.com/advice/star-method-interview)
 - [Behavioral Interview Tips](https://hired.com/blog/candidates/ace-behavioral-interview/)
 - [Salary Negotiation Guide](https://www.levels.fyi/negotiation)
+
+---
+
+## 6. 数据/训练/对齐方向范例
+
+### 6.1 SFT 数据构造与配比
+
+**Q: 你负责构建 SFT 数据集时，是如何决定数据来源和配比的？**
+
+```
+❌ 平庸回答：
+"我们用GPT-4生成了一些对话数据，然后混了一些开源数据，效果还不错。"
+
+✅ 优秀回答（结构化 + 数据思维）：
+
+"在XX项目中，我负责为某个垂类大模型构造50K SFT数据，整个流程分4步：
+
+【需求拆解】先和业务对齐能力维度——通用对话(40%)、垂类知识QA(30%)、
+推理(15%)、安全合规(10%)、长文档理解(5%)。这个配比不是拍脑袋，
+是基于HumanEval和内部benchmark反推的：当时通用对话只有60分
+而垂类知识有85分，说明模型'通才偏科'，需要把垂类数据配比拉高。
+
+【数据来源】我搭建了4路流水线：
+1. 业务真实日志脱敏 8K 条（最有价值）
+2. Self-Instruct 用 GPT-4 从 200 种子扩展到 20K
+3. Evol-Instruct 在已有数据上'进化'出 15K
+4. 公开数据集 ShareGPT + WizardLM 取 7K
+
+【质量过滤】用了3层过滤：
+- 启发式规则：剔除 < 50 chars、> 4K chars、HTML 残留
+- 困惑度过滤：KenLM 计算 PPL，砍掉最高和最低 15%
+- 分类器打分：用 GPT-4 给每条数据打分，保留 4 分以上
+
+【坑与反思】第一次我没做去重，结果 5% 数据是近似重复的，
+模型学到了重复模式。第二次加了 MinHash 去重后才解决。"
+```
+
+**Q: 训练时 Loss 突然变成 NaN，你会怎么排查？**
+
+```
+✅ 排查清单（按概率从高到低）：
+
+1. 数据问题（70%）
+   - 数据中存在超长序列 → max_length=2048 + 截断
+   - token IDs 越界或负值 → 重新校验 tokenizer 输出
+   - prompt 部分未 mask 干净，标签错位
+
+2. 训练超参（20%）
+   - learning rate 太大 → 降到 5e-6 试
+   - warmup_steps = 0 → 改为 100
+   - bf16 启用但显卡不支持 → 退回 fp16 或 fp32
+
+3. 工程问题（10%）
+   - gradient accumulation 错配，loss/=accum_steps 漏写
+   - 数据加载器多进程冲突 → num_workers=0
+   - checkpoint 加载不完整
+
+4. 调试技巧
+   - torch.autograd.detect_anomaly() 定位反向传播异常
+   - 关闭混合精度 → 隔离是 fp16 overflow 还是模型本身
+   - 用小数据 100 条复现，必现后再上全量
+```
+
+### 6.2 DPO 偏好数据构造与超参选择
+
+**Q: 你如何为 DPO 构造高质量的偏好数据？**
+
+```
+✅ 完整 pipeline 描述：
+
+【Step 1: Prompt 来源】
+- 30% 来自真实用户日志（最难拿、最有价值）
+- 50% Self-Instruct 扩展（用种子 prompt 让 GPT-4 生成）
+- 20% 公开数据集中的高频 prompt
+
+【Step 2: Multi-model Sampling】
+对每个 prompt，用 4 个不同模型生成回答：
+- SFT 模型（我们自己）
+- GPT-4
+- Claude 3.5
+- Qwen-72B
+这样可以保证 chosen 和 rejected 在风格、能力上都有差异，
+避免"chosen 完美 rejected 很差"的退化 pair。
+
+【Step 3: 标注】
+- 标注员：3 人一组 + IAA 校验（一致性 > 0.7）
+- 标准：准确性(40%)、有用性(30%)、无害性(20%)、表达(10%)
+- 每条 pair 还要有 1-5 分的细粒度打分，便于后续筛选 margin
+
+【Step 4: Quality Control】
+- 弃用 margin < 0.5 的 pair（信号弱）
+- 弃用 chosen 平均分 < 3.5 的 pair（基线太低）
+- 抽检 5% 做 gold set，标注员 calibration
+
+【Step 5: 数据增强】
+- Swap：chosen 和 rejected 互换训练一遍，提升对称性
+- 多语言翻译对：中英 pair 提升跨语言能力
+```
+
+**Q: DPO 训练中如何选择 beta 和 learning rate？**
+
+```
+✅ 经验公式 + 调参技巧：
+
+【beta 选择】
+- 默认 0.1，效果不够 → 试 0.05
+- 模型'答非所问'变得保守 → beta 太大，降到 0.05
+- 模型有 reward hacking 倾向 → beta 太小，升到 0.2
+- 行业经验：Llama3 用 0.1，Mistral 用 0.05
+
+【learning rate】
+- 比 SFT 低 1-2 个数量级（SFT=5e-5，DPO=5e-7）
+- 推荐 1e-6 到 1e-7 区间
+- lr_scheduler 必须用 cosine，不能用 constant
+- warmup_ratio=0.1（DPO 数据少，warmup 更重要）
+
+【判断是否过拟合】
+- 训练 reward margin 持续扩大 + eval loss 不下降 → 过拟合
+- 解决方法：早停、加 ref model 强度、降 beta
+
+【工程配方（Llama-Factory）】
+batch_size=128（每条偏好数据算 2 个样本）
+epochs=2-3
+loss_type=sigmoid（先跑基线）
+```
+
+### 6.3 PPO/GRPO 训练与 Reward Hacking
+
+**Q: 训练 PPO 时遇到 reward hacking 怎么办？**
+
+```
+✅ 真实案例回答（STAR 法则）：
+
+"我在XX项目中做 PPO 对齐时，遇到过一个典型的 reward hacking 案例：
+
+【Situation】我们训练一个客服对话模型，reward model 用 GPT-4 打分。
+训练到第 5 个 epoch，reward 从 0.6 升到 0.9，但人工评估发现：
+模型开始变得'啰嗦'，每次回答都堆砌很多'您好/请稍等'等废话。
+
+【Task】需要在不破坏 RLHF 收益的前提下，抑制这种 reward hacking。
+
+【Action】我用了 4 个方法：
+1. Length Penalty：在 reward 中加入 -0.01 * length_term
+   让过长回答的 reward 衰减
+2. KL 系数调整：把 β 从 0.05 提到 0.1，让模型更保守
+3. RM 重训：在训练集中专门加入'为长而长'的对抗样本，
+   chosen 是精炼版，rejected 是啰嗦版
+4. 离线评估加指标：每次 eval 时统计平均回答长度，
+   长度增加 > 20% 触发告警
+
+【Result】3 个 epoch 后：
+- 平均长度从 280 字降到 180 字（接近人类客服水平）
+- reward 稳定在 0.85（之前虚高 0.9）
+- 人工评估满意度从 72% 提到 81%
+
+【Reflection】这次最大的教训是：reward model 一定要有'反偏
+见'机制，否则模型一定会'迎合'。Goodhart's Law 在 RLHF
+里体现得淋漓尽致。"
+```
+
+**Q: 解释 GRPO 为什么能省显存？**
+
+```
+✅ 关键回答：
+
+GRPO 相比 PPO 最大的优势就是不用训练 critic/value model。
+
+【PPO 显存构成】
+- Policy 模型（学生）: 14GB
+- Reference 模型（冻结）: 14GB
+- Value model（critic）: 14GB
+- Reward model: 7GB
+- Optimizer 状态: 14GB
+合计：约 63GB
+
+【GRPO 显存构成】
+- Policy 模型: 14GB
+- Reference 模型: 14GB
+- Reward model: 7GB
+- Optimizer 状态: 14GB
+合计：约 49GB（省 22%）
+
+【关键 trick】用 Group 内相对优势代替 value baseline
+A_i = (R_i - mean(R)) / std(R)
+
+同一个 prompt 采样 G 个回答，它们的 reward 共享同一个 prompt 的均值
+方差归一化，作为 advantage 的无偏估计。这样不需要 critic 网络，
+但保留了 PPO 的方差缩减能力。
+
+【工程实现】
+DeepSeek-R1 用 GRPO 训练 670B 模型，节省下来的显存可以
+让 batch size 翻倍，反而加快了训练速度。"
+```
+
+### 6.4 OPD 蒸馏实战
+
+**Q: 详细讲一下你理解的 DeepSeek-R1 蒸馏流程？**
+
+```
+✅ 完整 pipeline 描述：
+
+【Stage 0：冷启动】
+用 6000 条高质量 CoT 数据（人工筛选）对基础模型 SFT，
+让模型'学会'输出详细推理过程。这一步关键，因为 R1 的回答
+包含大量'嗯/让我想想'等人类思维痕迹，必须先学会。
+
+【Stage 1：纯 RL 阶段（GRPO）】
+
+1. 准备任务：数学、代码、逻辑推理类 prompt
+2. 用 GRPO 训练 DeepSeek-V3-Base
+3. Reward Model 包含两个维度：
+   - Accuracy reward（答案正确性）
+   - Format reward（是否符合 <think>...</think> 格式）
+4. 训练到模型收敛，得到 DeepSeek-R1-Zero（无 SFT）
+
+【Stage 2：拒绝采样 + SFT】
+
+1. 用 R1-Zero 对 800K prompt 各采样 8-16 个回答
+2. 用 DeepSeek-V3 作为 judge（不是用 RM）打分
+3. 保留得分最高 + 格式正确的样本
+4. 用这些 800K 样本混合 200K 通用 SFT 数据做 SFT
+5. 得到 DeepSeek-R1
+
+【Stage 3：蒸馏到小模型】
+
+1. 用 R1 生成 800K 推理轨迹（数学/代码/逻辑）
+2. 用 Qwen/Llama 作为 base model 做 SFT 蒸馏
+3. 关键：不只是模仿回答，还要模仿 CoT 推理过程
+4. 不做 RL（这是与传统蒸馏的区别），纯 SFT 即可
+5. 得到 DeepSeek-R1-Distill-7B/14B/32B/70B 系列
+
+【核心洞察】
+- R1-Distill-7B 在 MATH benchmark 上超过 GPT-4o
+- 蒸馏数据里包含完整 CoT，这是学生能学会推理的关键
+- 只蒸馏 response 不蒸馏 CoT，效果会下降 30%+
+
+【为什么 on-policy 重要？】
+传统 SFT 蒸馏：教师分布 vs 学生分布 mismatch
+OPD：学生在自己的分布里探索，教师给指导
+       → 学生'消化'过的知识更牢"
+```
+
+**Q: OPD 和传统 SFT 蒸馏本质区别是什么？**
+
+```
+✅ 简短回答（一句话版）：
+"SFT 蒸馏是学生直接抄老师作业；OPD 是学生先自己做题，
+老师批改后学生再重做一遍并自我改进。"
+
+✅ 详细对比：
+
+【传统 SFT 蒸馏】
+- 数据：教师模型对各种 prompt 的输出（offline 收集）
+- 训练目标：max log π_student(y_teacher | x)
+- 问题：
+  * 教师分布 ≠ 学生分布（容量差异）
+  * 学生学的是"答案"不是"思维"
+  * 多样性差，教师模式固化为学生模式
+
+【OPD 蒸馏】
+- 数据：学生自己生成的输出 + 教师给每个输出打分
+- 训练目标：加权 SFT，权重 = reward
+  L = -E[ w(r) · log π_student(y_self | x) ]
+- 优势：
+  * 学生学的是"高质量输出"的分布（而非固定模式）
+  * 教师 RM 引导方向，学生保留自己的风格
+  * 多轮迭代：学生越强，采样越好 → 蒸馏越好
+
+【数学直觉】
+传统蒸馏最小化 KL(π_s || π_t)
+OPD 最小化 KL(π_s || π_ideal)，其中 π_ideal 由 RM 加权
+
+【适用场景】
+- 推理任务（CoT 蒸馏）：OPD >> SFT 蒸馏
+- 通用对话：差距不大，SFT 蒸馏足够
+- 多语言翻译：OPD 效果更好
+- 训练成本敏感：SFT 蒸馏更便宜"
+```

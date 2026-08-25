@@ -28,6 +28,7 @@ LLM Interview Master 是一款基于 AI Agent 的模拟面试系统，专为准�
 - ✅ **技术面+HR面**：完整的面试流程模拟，含反馈报告
 - ✅ **智能评分系统**：多维度评估，给出针对性改进建议
 - ✅ **高频题库**：技术问题 + HR问题 200+ 道
+- 🆕 **数据/训练全链路**：数据构建/清洗、SFT 实战、RL/DPO 对齐、OPD 蒸馏（DeepSeek-R1 风格）
 
 ---
 
@@ -63,7 +64,12 @@ LLM 核心知识
 ├── 微调技术 (LoRA, QLoRA, Adapter)
 ├── 推理优化 (KV Cache, 量化, Continuous Batching)
 ├── RAG与Agent (向量检索, ReAct, LangChain)
-└── 分布式训练 (ZeRO, Pipeline, Tensor Parallel)
+├── 分布式训练 (ZeRO, Pipeline, Tensor Parallel)
+├── 🆕 数据构建与清洗 (MinHash 去重, PII 脱敏, 质量过滤, 合成数据)
+├── 🆕 SFT 实战 (Chat Template, 损失 Mask, 数据配比, Loss 异常排查)
+├── 🆕 RL 对齐 (PPO/GRPO, Reward Hacking, Rejection Sampling)
+├── 🆕 DPO 进阶 (DPO/IPO/KTO/SimPO/ORPO/CPO, 偏好数据构造)
+└── 🆕 OPD 蒸馏 (On-Policy Distillation, DeepSeek-R1 实战)
 ```
 
 ---
@@ -114,10 +120,10 @@ interview-skill/
 | 文件 | 内容 | 行数 |
 |------|------|------|
 | `SKILL.md` | 面试流程、5层追问法、反馈模板 | ~400 |
-| `reference.md` | LLM核心知识 10大模块、50+问答 | ~600 |
-| `hr-questions.md` | HR面7大模块、30+高频问题 | ~500 |
-| `examples.md` | 技术面+HR面 高质量回答示例 | ~400 |
-| `rubric.md` | 5维度评分体系、评估模板 | ~400 |
+| `reference.md` | LLM核心知识 15大模块、60+问答（含数据/SFT/RL/DPO/OPD） | ~1500 |
+| `hr-questions.md` | HR面8大模块、40+高频问题（含数据/对齐方向） | ~900 |
+| `examples.md` | 技术面+HR面+数据/训练/对齐 高质量回答示例 | ~900 |
+| `rubric.md` | 6维度评分体系、评估模板（含数据与训练素养加分项） | ~500 |
 
 ---
 

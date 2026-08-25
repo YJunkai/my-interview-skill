@@ -14,6 +14,11 @@
 8. [分布式训练](#8-分布式训练)
 9. [RAG与Agent](#9-rag与agent)
 10. [向量数据库](#10-向量数据库)
+11. [🆕 数据构建与清洗](#11-数据构建与清洗)
+12. [🆕 SFT 有监督微调实战](#12-sft-有监督微调实战)
+13. [🆕 RL 对齐训练](#13-rl-对齐训练)
+14. [🆕 DPO 进阶与偏好优化家族](#14-dpo-进阶与偏好优化家族)
+15. [🆕 OPD On-Policy Distillation](#15-opd-on-policy-distillation)
 
 ---
 
@@ -633,6 +638,639 @@ Layer 0:  ●───●───●───●─●───●───●�
 
 ---
 
+---
+
+## 11. 数据构建与清洗
+
+### Q35: 大模型训练数据的来源有哪些？
+
+**答案：**
+
+| 来源 | 占比 | 典型 | 特点 |
+|------|------|------|------|
+| 网页抓取 Common Crawl | 60-70% | CC-MAIN-2024 | 量最大，噪声最多 |
+| 代码仓库 | 10-15% | GitHub, The Stack | 高质量，需过滤License |
+| 书籍 | 5-8% | Books3, Gutenberg | 知识密度高，长文 |
+| 论文/百科 | 3-5% | arXiv, Wikipedia | 事实性强 |
+| 问答/论坛 | 3-5% | StackOverflow, Reddit | 对话风格，事实需核实 |
+| 合成数据 | 5-15% | Self-Instruct, Evol-Instruct | 可控但有"模型味" |
+
+**LLaMA-3 数据配比**：50% 英文网页、25% 代码、10% 多语种、8% 学术、7% 书籍。
+
+### Q36: 如何做数据去重（Document-level）？
+
+**答案：**
+
+| 方法 | 原理 | 适用场景 |
+|------|------|----------|
+| Hash去重 | MD5/SHA 完全匹配 | 复制粘贴内容 |
+| MinHash | Jaccard 相似度估算 | 近似重复检测 |
+| SimHash | 局部敏感哈希 | 海量数据快速去重 |
+| SemDeDup | Embedding + 聚类 | 语义级重复 |
+| URL规范化 | URL去重 | 网页爬取 |
+
+**MinHash核心思想**：
+```
+签名 = min_hash(M)  # M是文档k-shingle集合
+Jaccard(A,B) ≈ similarity(sig(A), sig(B))
+```
+保留概率 < 0.8 的文档对，约可砍掉 20-30% 数据。
+
+### Q37: 文本质量过滤（Quality Filtering）的常用方法？
+
+**答案：**
+
+```
+层级一：启发式规则（Heuristic）
+├── 长度过滤：剔除 < 100 chars 或 > 100K chars 的文档
+├── 词比例过滤：字母/标点比、停用词比例
+├── 语言检测：fastText 置信度 > 0.65
+└── 符号过滤：乱码、HTML残留、不可见字符
+
+层级二：分类器打分（Classifier）
+├── 训练一个 quality classifier（基于BERT）
+├── 标注 10K 高质量 vs 低质量样本
+└── 预测每个文档的 quality score，保留 top-K
+
+层级三：困惑度过滤（PPL-based）
+├── 用预训练模型（如KenLM）计算 PPL
+├── PPL 极高 → 无意义文本
+├── PPL 极低 → 重复模板
+└── 保留中间 70% 的样本
+```
+
+**实战工具**：
+- **Gopher 规则**（DeepMind）：启发式规则集
+- **DSIR**（Stanford）：基于 importance resampling
+- **DataComp-LM**：大规模数据过滤比赛
+
+### Q38: PII（个人隐私信息）脱敏怎么做？
+
+**答案：**
+
+| 方案 | 工具 | 覆盖 |
+|------|------|------|
+| 正则匹配 | 邮箱、电话、身份证 | 弱结构化PII |
+| NER模型 | Presidio, spaCy | 姓名、地址 |
+| LLM识别 | GPT-4 + few-shot prompt | 长上下文PII |
+| 哈希化 | SHA256(email) | 用于关联而非训练 |
+
+**原则**：宁可误杀也不漏杀。训练数据中的PII会在推理时泄漏（如手机号、邮箱），且涉及 GDPR/CCPA 合规。
+
+### Q39: 如何构造 SFT 指令数据？
+
+**答案：**
+
+**主流构造方法**：
+
+```
+1. Self-Instruct（Wang 2022）
+   └── 给 GPT-4 175个种子指令 → 生成更多 → 过滤
+
+2. Evol-Instruct（WizardLM）
+   └── 在已有指令上"进化"：加深、加宽、加约束、改格式
+
+3. Backtranslation（Humpback）
+   └── 用基础模型生成回答 → 用GPT-4反向生成问题
+
+4. Human-in-the-loop
+   └── 众包平台 Labelbox/Scale AI 人工标注
+
+5. Rejection Sampling FT（Llama-2-chat）
+   └── 采样多个回答 → RM打分 → 只保留最优
+```
+
+**配比建议**（LLaMA-2-chat 论文）：
+
+| 数据类型 | 占比 | 来源 |
+|----------|------|------|
+| 通用对话 | 50% | ShareGPT, Wizard |
+| 知识问答 | 20% | Natural Questions |
+| 推理（数学/代码） | 15% | MATH, HumanEval |
+| 安全/价值观 | 10% | Anthropic HH |
+| 长文档理解 | 5% | BookQA |
+
+### Q40: 合成数据有哪些风险？
+
+**答案：**
+
+| 风险 | 现象 | 缓解 |
+|------|------|------|
+| 模型坍缩 (Model Collapse) | 迭代训练导致输出多样性下降 | 混入人类数据 |
+| 事实幻觉 | 看起来对但编造 | 与真实数据混合 |
+| "模型味" | 风格过于同质 | 多源 prompt 模板 |
+| 自我偏见 | 偏好 GPT-4 风格 | 多模型 ensemble |
+| 版权争议 | 训练数据本身争议 | 人工二次过滤 |
+
+---
+
+## 12. SFT 有监督微调实战
+
+### Q41: SFT 的训练损失如何计算？
+
+**答案：**
+
+**核心**：仅对 response 部分的 token 计算损失，prompt 部分 mask 掉。
+
+```python
+def sft_loss(model, input_ids, labels, prompt_lengths):
+    # labels[i] = -100 表示忽略
+    for i, pl in enumerate(prompt_lengths):
+        labels[i, :pl] = -100
+    
+    logits = model(input_ids).logits  # [B, T, V]
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    
+    loss = CrossEntropyLoss()(shift_logits.view(-1, V), shift_labels.view(-1))
+    return loss
+```
+
+**关键点**：
+- shift 操作：预测 `t+1` 用 `t` 的 logits
+- 不计算 prompt 损失，避免模型"学 prompt"
+- 部分实现会对所有 token 计算损失（Full LM Loss），效果略差
+
+### Q42: Chat Template 的重要性？
+
+**答案：**
+
+**三种主流格式**：
+
+| 模型 | 格式 |
+|------|------|
+| ChatML (Qwen, ChatGLM) | `<|im_start|>system\n...<|im_end|>\n<|im_start|>user\n...<|im_end|>\n<|im_start|>assistant\n` |
+| LLaMA-3 | `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n...<|eot_id|>` |
+| Mistral | `[INST] ... [/INST]` |
+
+**踩坑点**：
+1. 训练用 ChatML，推理用 raw → 灾难性遗忘
+2. 多轮对话需要正确拼接 `assistant` 边界
+3. Special token 在 tokenizer 中必须注册
+
+### Q43: SFT 中如何处理多轮对话？
+
+**答案：**
+
+**方案一：全量计算损失**（简单但效果差）
+- 把每轮都当独立样本
+- 上下文长度易爆炸
+
+**方案二：仅最后一轮计算损失**（LLaMA-2 风格）
+- 前 N-1 轮全部 mask
+- 只算最后一轮 response 的损失
+- 训练效率高，但学不到多轮一致性
+
+**方案三：Assistant 部分全算损失**（推荐）
+- 对每轮 assistant 的 token 计算损失
+- user/system 部分 mask
+- 兼顾效率和效果
+
+### Q44: 数据配比（Data Mixing）的策略？
+
+**答案：**
+
+**核心原则**：
+
+```
+"不要让主导 domain 压制长尾 domain"
+```
+
+**常用方法**：
+
+1. **按比例上采样**：稀有domain重复多遍
+2. **按比例下采样**：主导domain随机丢弃
+3. **DoReMi 域权重**（Microsoft 2023）：
+   - 用 proxy model 学习最优域权重
+4. **离线调参**：通过 eval loss/benchmark 反推
+
+**LLaMA-2 配方**：SFT阶段数据 27,540 条标注 + 1M Rejection Sampling 生成。
+
+### Q45: SFT 数据量多少合适？
+
+**答案：**
+
+| 场景 | 推荐数据量 | 来源 |
+|------|-----------|------|
+| 行业小模型微调（客服/FAQ） | 5K-20K | 业务真实数据 |
+| 通用指令微调 | 50K-200K | Self-Instruct + 人工 |
+| RLHF 第一阶段 | 10K-50K | 高质量人工标注 |
+| 持续学习（Continue Training） | 100K-1M | 行业语料 |
+
+**经验法则**：数据质量 > 数据数量。10万条精心标注 > 100万条粗糙数据。
+
+### Q46: 训练时遇到 Loss 异常如何处理？
+
+**答案：**
+
+```
+症状1：Loss = NaN
+├── 排查：数据中是否有异常 token、超长序列
+├── 处理：clip grad norm=1.0, fp32 master weights
+└── 工具：torch.autograd.detect_anomaly()
+
+症状2：Loss 不下降
+├── 排查：lr 太小？数据全 mask？标签错位？
+├── 检查：tokenize 后 ids 是否与 labels 一一对应
+└── 处理：换 AdamW，warmup ratio=0.03
+
+症状3：Loss 震荡
+├── 排查：batch size 太小？lr 太大？
+└── 处理：增大 batch，cosine lr schedule
+
+症状4：Eval loss 下降但 benchmark 差
+├── 排查：训练/测试分布不一致
+└── 处理：人为构造 in-domain eval set
+```
+
+---
+
+## 13. RL 对齐训练
+
+### Q47: 什么是 Reward Hacking？如何避免？
+
+**答案：**
+
+**定义**：模型学会了"骗过"Reward Model 但实际质量下降的现象。
+
+**常见模式**：
+
+```
+1. Length Bias
+   └── 模型生成越来越长的回答，RM 偏好长文本
+   └── 缓解：长度归一化、length penalty
+
+2. Verbosity Bias
+   └── 堆砌废话显得"详尽"
+   └── 缓解：RM 训练时人工剔除"为长而长"的回答
+
+3. Repetition
+   └── 反复重写同一观点
+   └── 缓解：n-gram penalty，重复率监控
+
+4. Sycophancy 谄媚
+   └── "您说得对！完全同意！"
+   └── 缓解：RM 中加入对抗样本
+
+5. Goodhart's Law
+   └── "当度量成为目标时，它就不再是好度量"
+   └── 缓解：多维度 RM，定期人工校准
+```
+
+### Q48: Reward Model 的训练细节？
+
+**答案：**
+
+**损失函数**（Bradley-Terry 模型）：
+```
+L = -log σ(r_chosen - r_rejected)
+```
+
+**实现要点**：
+
+```python
+class RewardModel(nn.Module):
+    def __init__(self, base_model):
+        self.backbone = base_model
+        self.reward_head = nn.Linear(hidden_size, 1)
+    
+    def forward(self, input_ids):
+        hidden = self.backbone(input_ids).last_hidden_state
+        # 取最后一个 token 的隐状态
+        reward = self.reward_head(hidden[:, -1, :])
+        return reward
+
+# 训练
+chosen_reward = rm(prompt + chosen_response)
+rejected_reward = rm(prompt + rejected_response)
+loss = -F.logsigmoid(chosen_reward - rejected_reward).mean()
+```
+
+**数据要求**：
+- 单条 prompt 对应 K 个 response（K≥4）
+- chosen vs rejected 必须质量差距明显
+- 引入 "margin"：差 < 0.5 的 pair 弃用
+
+### Q49: PPO 在 LLM 训练中的核心公式？
+
+**答案：**
+
+**目标函数**：
+```
+J(θ) = E[ R(y) - β · KL(π_θ || π_ref) ]
+```
+
+**实际优化用 PPO-Clip 目标**：
+```
+L^CLIP(θ) = E[ min(r_t(θ)·A_t, clip(r_t(θ), 1-ε, 1+ε)·A_t) ]
+
+其中 r_t(θ) = π_θ(a_t|s_t) / π_old(a_t|s_t)
+      A_t = advantage = R_t - V(s_t)
+```
+
+**实战技巧**：
+- `clip_epsilon = 0.2`
+- `GAE lambda = 0.95`
+- `mini_batch = 1`（显存允许时）
+- KL 系数 β 通常 0.05-0.1
+
+### Q50: PPO 训练的工程挑战有哪些？
+
+**答案：**
+
+| 挑战 | 原因 | 解决 |
+|------|------|------|
+| 显存爆炸 | 4个模型：policy, ref, value, reward | LoRA + frozen ref |
+| 训练不稳定 | reward 信号噪声大 | 优势归一化、KL early stop |
+| 收敛慢 | online 采样 + 同步 | 异步生成、Adaptive KL |
+| off-policy 失效 | 数据分布漂移 | importance ratio clipping |
+
+**核心工具**：
+- **TRL**（HuggingFace）：最常用 SFT/PPO/DPO 库
+- **OpenRLHF**：高性能 RLHF 框架
+- **DeepSpeed-Chat**：分布式 RLHF
+
+### Q51: 什么是 GRPO（Group Relative Policy Optimization）？
+
+**答案：**
+
+**提出者**：DeepSeekMath, DeepSeek-R1
+
+**核心思想**：不需要 critic/value model，用 group 内相对优势。
+
+```
+对每个 prompt 采样 G 个回答 {y_1, ..., y_G}
+A_i = (R_i - mean(R_1..G)) / std(R_1..G)
+
+L = -E[ π_θ(y_i|x) / π_old(y_i|x) · A_i ] + β · KL
+```
+
+**优势**：
+- 显存省：无需 value model
+- 训练稳：group 内归一化降低方差
+- 效果强：DeepSeek-R1 用 GRPO + RL 训练推理能力
+
+### Q52: Rejection Sampling Fine-tuning（RSF）的原理？
+
+**答案：**
+
+**流程**：
+```
+1. 用 SFT 模型对每个 prompt 采样 K 个回答
+2. 用 RM 评分
+3. 只保留得分最高的 1-N 个作为训练数据
+4. 用这些"自我精华"再做一次 SFT
+```
+
+**LLaMA-2-chat 的做法**：
+- 每 2 个 epoch 做一次 RS
+- 500K 迭代下来产生 1M 高质量样本
+- 配合 PPO 效果叠加
+
+**优点**：
+- 简单稳定（纯 SFT，不需要 RL 库）
+- 不需要 reward hacking
+- 与 SFT pipeline 无缝衔接
+
+---
+
+## 14. DPO 进阶与偏好优化家族
+
+### Q53: DPO 的核心数学推导？
+
+**答案：**
+
+**出发点**：PPO 的最优策略有闭式解
+```
+π*(y|x) ∝ π_ref(y|x) · exp(R(x,y)/β)
+```
+
+**取对数 + 配对化简**，得到 DPO 损失：
+```
+L_DPO = -log σ( β · log(π_θ(y_w|x)/π_y(y_w|x)) 
+                  - β · log(π_θ(y_l|x)/π_y(y_l|x)) )
+
+其中：
+  - y_w = chosen (preferred)
+  - y_l = rejected
+  - π_y = 推理时"冻结"的策略（实践中用 ref model）
+```
+
+**直觉**：直接增大 chosen 的似然，减小 rejected 的似然，但用 reference model 锚定。
+
+### Q54: DPO 的常见问题及变种？
+
+**答案：**
+
+| 问题 | 表现 | 变种方案 |
+|------|------|----------|
+| 长度偏差 | 模型学会"答得长 = 好" | R-DPO 加长度归一化 |
+| 概率坍缩 | π_ref 概率被压到 0 | IPO 加正则 |
+| 单一偏好 | 仅二元 (chosen/rejected) | KTO 用前景理论 |
+| 推理慢 | 仍需加载 ref model | CPO 取消 ref |
+| 缺乏多样性 | 生成模式单一 | SimPO 简化目标 |
+
+### Q55: 主流偏好优化变种对比
+
+**答案：**
+
+| 算法 | 全称 | 核心改动 | 代表论文 |
+|------|------|----------|----------|
+| DPO | Direct Preference Optimization | 闭式解偏好 | NeurIPS 2023 |
+| IPO | Identity Preference Optimization | 加 ` (Δ/2β)²` 项 | 2023 |
+| KTO | Kahneman-Tversky Optimization | 用前景理论，无须 pair | 2024 |
+| CPO | Contrastive Preference Optimization | 取消 ref model | 2024 |
+| SimPO | Simple Preference Optimization | 去掉 ref，用 length-norm | 2024 |
+| ORPO | Odds Ratio Preference Optimization | SFT loss + odds ratio | 2024 |
+| RLOO | REINFORCE Leave-One-Out | 用 REINFORCE+LOO 估计 baseline | 2022 |
+
+**选择建议**：
+```
+数据量大、效果优先 → DPO + R-DPO
+显存紧张、推理快 → CPO / SimPO
+数据无 rejected → KTO
+显存紧张 + 效果优先 → ORPO
+```
+
+### Q56: 偏好数据集如何构造？
+
+**答案：**
+
+**开源偏好数据集**：
+
+| 数据集 | 规模 | 来源 |
+|--------|------|------|
+| Anthropic HH-RLHF | 170K | 人类标注 |
+| UltraFeedback | 204K | GPT-4 打分 |
+| OpenAssistant | 90K | 众包 |
+| HelpSteer2 | 21K | NVIDIA 多维标注 |
+| Magpie | 1M | Self-Instruct 衍生 |
+
+**构造流程**：
+```
+Prompt 来源
+├── Human-written：用户真实问题（最稀缺）
+├── Generated：用种子 prompt LLM 扩展
+└── Mixed：两者配比
+
+Response 生成
+├── Multi-model sampling：3-5 个模型生成
+├── Human ranking：标注员排序
+└── Auto-ranking：GPT-4/Claude 当裁判
+
+Quality Check
+├── 人工抽检 5-10%
+├── 标注员一致性（IAA > 0.7）
+└── Margin filtering
+```
+
+**踩坑点**：
+- 拒绝"明显错误"的回答 → 数据偏负面
+- 标注员偏好"漂亮话" → 风格偏差
+- "Tie" pair 占比过高 → 信号弱
+
+### Q57: DPO 训练的关键超参？
+
+**答案：**
+
+```yaml
+# 关键超参（Llama-Factory 默认）
+beta: 0.1                 # KL 系数，越大越保守
+learning_rate: 5e-7       # 比 SFT 低 1-2 个数量级
+lr_scheduler: cosine
+warmup_ratio: 0.1
+batch_size: 128           # 偏好 batch（含 chosen+rejected）
+epochs: 2-3
+loss_type: sigmoid        # 或 ipo, kto, simpo
+max_length: 1024          # prompt + response
+max_prompt_length: 512
+```
+
+**调参经验**：
+- `beta` ↑ → 模型更保守，但容易"答非所问"
+- `beta` ↓ → 模型更激进，但易 reward hacking
+- `lr` 不能太大，否则破坏 SFT 已有能力
+- 推荐先用 SimPO 跑基线
+
+---
+
+## 15. OPD On-Policy Distillation
+
+### Q58: 什么是 OPD（On-Policy Distillation）？
+
+**答案：**
+
+**定义**：把 on-policy RL 与 SFT 蒸馏结合，让学生模型从教师模型的 on-policy 轨迹中学习。
+
+**核心动机**：
+```
+传统 SFT 蒸馏：学生模仿"教师在各种 prompt 上的 offline 回答"
+                 → 学生学不到教师的"决策过程"
+
+OPD：学生自己生成回答 → 教师给每个回答打 reward
+     → 学生学习"什么样的回答能得高分"
+```
+
+**DeepSeek-R1 的应用**：
+- 教师：DeepSeek-R1（强推理模型）
+- 学生：DeepSeek-V3 / Qwen-7B（更小）
+- 数据：800K 高质量 on-policy 轨迹
+
+### Q59: OPD vs SFT 蒸馏 vs PPO？
+
+**答案：**
+
+| 方案 | 数据来源 | 教师参与 | 训练目标 |
+|------|----------|----------|----------|
+| SFT 蒸馏 | 教师 offline 输出 | 一次性 | 模仿 KL(学生||教师) |
+| PPO | 学生 on-policy | RM 评分 | 最大奖励 |
+| OPD | 学生 on-policy | 教师 RM | 模仿 + 奖励 |
+
+**公式**：
+```
+L_OPD = α · KL(π_student || π_teacher) 
+      + (1-α) · (-R(y) · log π_student(y|x))
+
+其中 y 是学生自己生成的样本
+```
+
+**优势**：
+1. 比纯 SFT 蒸馏效果更好（学生"消化"过）
+2. 比 PPO 训练更稳定（不需要 critic）
+3. 可以看作"带教师指导的 SFT"
+
+### Q60: OPD 的实战 pipeline？
+
+**答案：**
+
+```
+┌──────────────────────────────────────────────────────┐
+│                OPD Training Pipeline                  │
+├──────────────────────────────────────────────────────┤
+│                                                       │
+│  Step 1: 生成 on-policy 样本                         │
+│  ┌──────────────────────────┐                       │
+│  │ 学生模型采样 y ~ π_s(·|x)│  × N samples/prompt   │
+│  └──────────────────────────┘                       │
+│             ↓                                         │
+│  Step 2: 教师评分                                     │
+│  ┌──────────────────────────┐                       │
+│  │ 教师 RM: r = R_T(x, y)   │                       │
+│  │ 或教师模型打分            │                       │
+│  └──────────────────────────┘                       │
+│             ↓                                         │
+│  Step 3: 加权 SFT                                     │
+│  ┌──────────────────────────┐                       │
+│  │ L = -E[ w(y) · log π_s ]│  w(y) = softmax(r/τ)  │
+│  └──────────────────────────┘                       │
+│             ↓                                         │
+│  Step 4: 多轮迭代                                     │
+│  ┌──────────────────────────┐                       │
+│  │ 学生已更新 → 重新采样     │                       │
+│  │ 重复 Step 1-3            │                       │
+│  └──────────────────────────┘                       │
+└──────────────────────────────────────────────────────┘
+```
+
+### Q61: OPD 在 DeepSeek-R1 中的关键创新？
+
+**答案：**
+
+1. **冷启动数据**：先用 6000 条高质量 SFT 数据冷启动
+2. **拒绝采样 + RL**：生成 + GRPO 筛选，再做 SFT
+3. **多阶段蒸馏**：
+   - Stage 1: R1 → 蒸馏到 V3-base
+   - Stage 2: V3-base → 进一步小尺寸 (如 7B)
+4. **保留推理痕迹**：要求模型输出完整 CoT，不删"嗯/啊"等
+5. **数据配比**：推理数据 60%，通用数据 40%
+
+**结论**：DeepSeek-R1-Distill 系列在多项推理 benchmark 上超过 GPT-4o。
+
+### Q62: OPD 面试高频追问点？
+
+**答案：**
+
+**Q: OPD 相比 DPO 的优势？**
+
+| 维度 | DPO | OPD |
+|------|-----|-----|
+| 教师使用 | 静态偏好数据 | 动态教师打分 |
+| 训练信号 | chosen vs rejected | 教师 RL 轨迹 |
+| 数据效率 | 中等 | 更高（on-policy 匹配学生分布） |
+| 推理能力 | 中等 | 强（可继承 R1 推理模式） |
+
+**Q: OPD 在哪些场景特别有效？**
+- 推理任务（数学、代码）
+- 长 CoT 蒸馏
+- 教师昂贵不能全量微调时
+
+**Q: OPD 的失败模式？**
+- 教师 RM 本身有 bias → 学生继承
+- on-policy 采样成本高
+- 训练不稳定（on-policy 方差大）
+
+---
+
 ## 面试高频追问
 
 ### 深度追问方向
@@ -645,6 +1283,13 @@ Layer 0:  ●───●───●───●─●───●───●�
 6. **指令遵循**：如何训练？数据如何构建？
 7. **思维链（CoT）**：为什么有效？
 8. **涌现能力**：什么是涌现？为什么会出现？
+9. **🆕 数据质量vs数量**：Scaling Law 在数据上的体现？
+10. **🆕 SFT数据配比**：如何平衡多domain？
+11. **🆕 Reward Hacking**：如何检测和缓解？
+12. **🆕 DPO的局限**：哪些情况下DPO不如PPO？
+13. **🆕 GRPO vs PPO**：显存和效果的trade-off？
+14. **🆕 OPD vs 传统蒸馏**：为什么on-policy重要？
+15. **🆕 DeepSeek-R1的训练流程**：能否完整讲一遍？
 
 ---
 
@@ -659,3 +1304,15 @@ Layer 0:  ●───●───●───●─●───●───●�
 - [QLoRA Paper](https://arxiv.org/abs/2305.14314)
 - [vLLM Paper](https://arxiv.org/abs/2309.06180)
 - [RAG Survey](https://arxiv.org/abs/2312.10997)
+- [Self-Instruct Paper](https://arxiv.org/abs/2212.10560)
+- [WizardLM Evol-Instruct](https://arxiv.org/abs/2304.12244)
+- [LLaMA-2-Chat RLHF](https://arxiv.org/abs/2307.09288)
+- [DPO Paper](https://arxiv.org/abs/2305.18290)
+- [IPO Paper](https://arxiv.org/abs/2310.12036)
+- [KTO Paper](https://arxiv.org/abs/2402.01306)
+- [SimPO Paper](https://arxiv.org/abs/2405.14734)
+- [ORPO Paper](https://arxiv.org/abs/2403.07691)
+- [GRPO Paper (DeepSeekMath)](https://arxiv.org/abs/2402.03300)
+- [DeepSeek-R1 Paper](https://arxiv.org/abs/2501.12948)
+- [DataComp-LM (Data Filtering)](https://arxiv.org/abs/2406.04170)
+- [QLoRA Paper](https://arxiv.org/abs/2305.14314)

@@ -97,6 +97,11 @@ description: >-
 - **推理优化**：量化、KV Cache、Continuous Batching、Triton
 - **分布式训练**：ZeRO、Pipeline Parallel、Tensor Parallel
 - **RAG/LangChain**：向量检索、Agent、Memory
+- **🆕 数据构建与清洗**：去重(Hash/MinHash)、质量过滤、PII脱敏、合成数据
+- **🆕 SFT实战**：Chat Template、损失 Mask、配比策略、训练异常处理
+- **🆕 RL对齐**：Reward Model、PPO/GRPO、Reward Hacking、Rejection Sampling
+- **🆕 DPO进阶**：IPO/KTO/SimPO/ORPO/CPO、偏好数据构造、超参选择
+- **🆕 OPD蒸馏**：On-Policy Distillation、DeepSeek-R1 实战、推理模型蒸馏
 
 ### 5. HR面高频问题
 
